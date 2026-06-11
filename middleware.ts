@@ -26,19 +26,17 @@ export async function middleware(request: NextRequest) {
   );
 
   const { data: { user } } = await supabase.auth.getUser();
-
   const pathname = request.nextUrl.pathname;
 
   const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/cadastro");
-  const isPublicPage = pathname === "/" || pathname.startsWith("/_next") || pathname.startsWith("/favicon");
   const isProtectedPage = pathname.startsWith("/tools");
 
-  // Redireciona para login se tentar acessar área protegida sem estar logado
   if (!user && isProtectedPage) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(loginUrl);
   }
 
-  // Redireciona para tools se já logado e tentar acessar login/cadastro
   if (user && isAuthPage) {
     return NextResponse.redirect(new URL("/tools/split", request.url));
   }
