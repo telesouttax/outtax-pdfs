@@ -11,6 +11,21 @@ type Status = "idle" | "loading" | "reading" | "done" | "error";
 type Mode = "ranges" | "all";
 type NamingMode = "auto" | "manual";
 
+async function renderPageToCanvas(file: File, pageNum: number): Promise<HTMLCanvasElement> {
+  const pdfjsLib = await import("pdfjs-dist");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const page = await pdf.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 2 });
+  const canvas = document.createElement("canvas");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext("2d")!;
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  return canvas;
+}
+
 async function extractPageText(file: File, pageNum: number): Promise<string> {
   const pdfjsLib = await import("pdfjs-dist");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
@@ -18,11 +33,30 @@ async function extractPageText(file: File, pageNum: number): Promise<string> {
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page = await pdf.getPage(pageNum);
   const content = await page.getTextContent();
-  return content.items.map((item: any) => item.str).join(" ");
+  const text = content.items.map((item: any) => item.str).join(" ").trim();
+  return text;
+}
+
+async function extractTextWithOCR(file: File, pageNum: number): Promise<string> {
+  const canvas = await renderPageToCanvas(file, pageNum);
+  const Tesseract = await import("tesseract.js");
+  const result = await Tesseract.recognize(canvas, "por", {
+    logger: () => {},
+  } as any);
+  return result.data.text;
+}
+
+async function getPageText(file: File, pageNum: number): Promise<string> {
+  // Tenta texto nativo primeiro; se vazio, faz OCR
+  const native = await extractPageText(file, pageNum);
+  if (native.length > 10) return native;
+  return extractTextWithOCR(file, pageNum);
 }
 
 function suggestNameFromText(text: string, pageNum: number): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
+
+  // Padrão: sequência de palavras em maiúsculas (nomes de pagadores em boletos/recibos)
   const upperWordsMatch = cleaned.match(/\b([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}){1,5})\b/);
   if (upperWordsMatch) {
     return upperWordsMatch[1]
@@ -30,8 +64,11 @@ function suggestNameFromText(text: string, pageNum: number): string {
       .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
       .join(" ");
   }
+
+  // Fallback: primeiras palavras com mais de 3 letras
   const words = cleaned.split(" ").filter((w) => w.length > 3).slice(0, 4);
   if (words.length > 0) return words.join(" ").slice(0, 40);
+
   return `Pagina_${pageNum}`;
 }
 
@@ -44,6 +81,7 @@ export default function SplitPage() {
   const [pageNames, setPageNames] = useState<string[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [readingProgress, setReadingProgress] = useState(0);
+  const [readingLabel, setReadingLabel] = useState("");
   const [error, setError] = useState("");
 
   async function handleFile(f: File) {
@@ -69,7 +107,8 @@ export default function SplitPage() {
     try {
       const names: string[] = [];
       for (let i = 1; i <= pageCount; i++) {
-        const text = await extractPageText(file, i);
+        setReadingLabel(`Lendo página ${i} de ${pageCount}…`);
+        const text = await getPageText(file, i);
         names.push(suggestNameFromText(text, i));
         setReadingProgress(Math.round((i / pageCount) * 100));
       }
@@ -77,7 +116,7 @@ export default function SplitPage() {
       setStatus("idle");
     } catch (e) {
       console.error(e);
-      setError("Não foi possível ler o texto. O PDF pode estar digitalizado como imagem — use nomeação manual.");
+      setError("Não foi possível ler o texto do PDF. Tente novamente.");
       setStatus("error");
     }
   }
@@ -92,7 +131,8 @@ export default function SplitPage() {
       for (let i = 0; i < ranges.length; i++) {
         const r = ranges[i];
         const from = Math.max(1, parseInt(r.from) || 1);
-        const text = await extractPageText(file, from);
+        setReadingLabel(`Lendo parte ${i + 1} de ${ranges.length}…`);
+        const text = await getPageText(file, from);
         named.push({ ...r, name: suggestNameFromText(text, from) });
         setReadingProgress(Math.round(((i + 1) / ranges.length) * 100));
       }
@@ -100,7 +140,7 @@ export default function SplitPage() {
       setStatus("idle");
     } catch (e) {
       console.error(e);
-      setError("Não foi possível ler o texto. O PDF pode estar digitalizado como imagem — use nomeação manual.");
+      setError("Não foi possível ler o texto do PDF. Tente novamente.");
       setStatus("error");
     }
   }
@@ -183,6 +223,7 @@ export default function SplitPage() {
     setStatus("idle");
     setError("");
     setReadingProgress(0);
+    setReadingLabel("");
   }
 
   const isProcessing = status === "loading" || status === "reading";
@@ -205,6 +246,8 @@ export default function SplitPage() {
           <DropZone onFile={handleFile} />
         ) : (
           <div className="space-y-6">
+
+            {/* File info */}
             <div className="flex items-center justify-between p-4 bg-white border border-slate-200 rounded-xl">
               <div>
                 <p className="font-medium text-slate-800 text-sm">{file.name}</p>
@@ -217,6 +260,7 @@ export default function SplitPage() {
               </button>
             </div>
 
+            {/* Mode selector */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como deseja separar?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -231,6 +275,7 @@ export default function SplitPage() {
               </div>
             </div>
 
+            {/* Naming mode */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como nomear os arquivos?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -239,7 +284,7 @@ export default function SplitPage() {
                     <Wand2 size={14} className={namingMode === "auto" ? "text-blue-600" : "text-slate-400"} />
                     <p className={`text-sm font-medium ${namingMode === "auto" ? "text-blue-700" : "text-slate-700"}`}>Automático</p>
                   </div>
-                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Lê o texto e sugere nomes</p>
+                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Lê texto e imagem (OCR)</p>
                 </button>
                 <button onClick={() => setNamingMode("manual")} className={`p-4 rounded-xl border text-left transition-all ${namingMode === "manual" ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}>
                   <div className="flex items-center gap-2 mb-1">
@@ -251,6 +296,7 @@ export default function SplitPage() {
               </div>
             </div>
 
+            {/* Auto naming button */}
             {namingMode === "auto" && (
               <div>
                 <button
@@ -263,17 +309,20 @@ export default function SplitPage() {
                   ) : (
                     <Wand2 size={15} />
                   )}
-                  {status === "reading" ? `Lendo… ${readingProgress}%` : "Ler PDF e sugerir nomes"}
+                  {status === "reading" ? readingLabel : "Ler PDF e sugerir nomes"}
                 </button>
                 {status === "reading" && (
                   <div className="mt-3 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                     <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${readingProgress}%` }} />
                   </div>
                 )}
-                <p className="text-xs text-slate-400 mt-2">Funciona apenas em PDFs com texto selecionável. PDFs escaneados não são suportados.</p>
+                <p className="text-xs text-slate-400 mt-2">
+                  Funciona com PDFs normais e escaneados. PDFs escaneados podem demorar mais devido ao OCR.
+                </p>
               </div>
             )}
 
+            {/* Page names list (all mode) */}
             {mode === "all" && (namingMode === "manual" || pageNames.some((n) => !n.startsWith("Pagina_"))) && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">
@@ -297,6 +346,7 @@ export default function SplitPage() {
               </div>
             )}
 
+            {/* Ranges */}
             {mode === "ranges" && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">Intervalos de páginas</p>
