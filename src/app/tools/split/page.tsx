@@ -11,53 +11,61 @@ type Status = "idle" | "loading" | "reading" | "done" | "error";
 type Mode = "ranges" | "all";
 type NamingMode = "auto" | "manual";
 
-async function renderPageAsBase64(file: File, pageNum: number): Promise<string> {
+async function getPdfJs() {
   const pdfjsLib = await import("pdfjs-dist");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+  return pdfjsLib;
+}
+
+async function extractNativeText(file: File, pageNum: number): Promise<string> {
+  const pdfjsLib = await getPdfJs();
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
   const page = await pdf.getPage(pageNum);
-  const viewport = page.getViewport({ scale: 1.5 });
+  const content = await page.getTextContent();
+  return content.items.map((item: any) => item.str).join(" ").trim();
+}
+
+async function renderPageToCanvas(file: File, pageNum: number): Promise<HTMLCanvasElement> {
+  const pdfjsLib = await getPdfJs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+  const page = await pdf.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 2 });
   const canvas = document.createElement("canvas");
   canvas.width = viewport.width;
   canvas.height = viewport.height;
-  const ctx = canvas.getContext("2d")!;
-  await page.render({ canvasContext: ctx, viewport }).promise;
-  return canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+  await page.render({ canvasContext: canvas.getContext("2d")!, viewport }).promise;
+  return canvas;
 }
 
-async function suggestNameWithAI(base64Image: string): Promise<string> {
-  const response = await fetch("/api/suggest-name", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 100,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: "image/jpeg", data: base64Image },
-            },
-            {
-              type: "text",
-              text: `Olhe essa página de documento PDF (pode ser boleto, recibo, contrato, comprovante etc).
-Identifique o nome da pessoa ou empresa pagadora/titular principal.
-Responda APENAS com o nome encontrado, sem explicações, sem pontuação extra.
-Se não encontrar nenhum nome, responda apenas: sem_nome`,
-            },
-          ],
-        },
-      ],
-    }),
-  });
+async function extractTextWithOCR(file: File, pageNum: number): Promise<string> {
+  const canvas = await renderPageToCanvas(file, pageNum);
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("por");
+  const { data } = await worker.recognize(canvas);
+  await worker.terminate();
+  return data.text;
+}
 
-  const data = await response.json();
-  const text = data?.content?.[0]?.text?.trim() || "sem_nome";
-  // Sanitiza o nome para uso como nome de arquivo
-  return text.replace(/[^a-zA-Z0-9À-ú\s_-]/g, "").trim().slice(0, 60) || "sem_nome";
+async function getPageText(file: File, pageNum: number): Promise<string> {
+  const native = await extractNativeText(file, pageNum);
+  if (native.length > 10) return native;
+  return extractTextWithOCR(file, pageNum);
+}
+
+function suggestNameFromText(text: string, pageNum: number): string {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  const upperWordsMatch = cleaned.match(/\b([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}){1,5})\b/);
+  if (upperWordsMatch) {
+    return upperWordsMatch[1]
+      .split(" ")
+      .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+      .join(" ");
+  }
+  const words = cleaned.split(" ").filter((w) => w.length > 3).slice(0, 4);
+  if (words.length > 0) return words.join(" ").slice(0, 40);
+  return `Pagina_${pageNum}`;
 }
 
 export default function SplitPage() {
@@ -87,25 +95,31 @@ export default function SplitPage() {
     }
   }
 
+  async function autoName(pages: number[], onName: (i: number, name: string) => void) {
+    for (let idx = 0; idx < pages.length; idx++) {
+      const pageNum = pages[idx];
+      setReadingLabel(`Analisando página ${pageNum}${pages.length > 1 ? ` de ${pages.length}` : ""}…`);
+      const text = await getPageText(file!, pageNum);
+      onName(idx, suggestNameFromText(text, pageNum));
+      setReadingProgress(Math.round(((idx + 1) / pages.length) * 100));
+    }
+  }
+
   async function autoNamePages() {
     if (!file) return;
     setStatus("reading");
     setReadingProgress(0);
     setError("");
     try {
-      const names: string[] = [];
-      for (let i = 1; i <= pageCount; i++) {
-        setReadingLabel(`Analisando página ${i} de ${pageCount}…`);
-        const base64 = await renderPageAsBase64(file, i);
-        const name = await suggestNameWithAI(base64);
-        names.push(name);
-        setReadingProgress(Math.round((i / pageCount) * 100));
-      }
-      setPageNames(names);
+      const names = [...pageNames];
+      await autoName(
+        Array.from({ length: pageCount }, (_, i) => i + 1),
+        (idx, name) => { names[idx] = name; setPageNames([...names]); }
+      );
       setStatus("idle");
     } catch (e) {
       console.error(e);
-      setError("Erro ao analisar o PDF. Verifique sua conexão e tente novamente.");
+      setError("Não foi possível analisar o PDF. Tente a nomeação manual.");
       setStatus("error");
     }
   }
@@ -116,21 +130,15 @@ export default function SplitPage() {
     setReadingProgress(0);
     setError("");
     try {
-      const named: Range[] = [];
-      for (let i = 0; i < ranges.length; i++) {
-        const r = ranges[i];
-        const from = Math.max(1, parseInt(r.from) || 1);
-        setReadingLabel(`Analisando parte ${i + 1} de ${ranges.length}…`);
-        const base64 = await renderPageAsBase64(file, from);
-        const name = await suggestNameWithAI(base64);
-        named.push({ ...r, name });
-        setReadingProgress(Math.round(((i + 1) / ranges.length) * 100));
-      }
-      setRanges(named);
+      const named = [...ranges];
+      await autoName(
+        ranges.map((r) => Math.max(1, parseInt(r.from) || 1)),
+        (idx, name) => { named[idx] = { ...named[idx], name }; setRanges([...named]); }
+      );
       setStatus("idle");
     } catch (e) {
       console.error(e);
-      setError("Erro ao analisar o PDF. Verifique sua conexão e tente novamente.");
+      setError("Não foi possível analisar o PDF. Tente a nomeação manual.");
       setStatus("error");
     }
   }
@@ -158,13 +166,14 @@ export default function SplitPage() {
     try {
       const JSZip = (await import("jszip")).default;
       const zip = new JSZip();
+      const sanitize = (s: string, fallback: string) =>
+        s.replace(/[^a-zA-Z0-9À-ú\s_-]/g, "").trim() || fallback;
 
       if (mode === "all") {
         const allRanges = Array.from({ length: pageCount }, (_, i) => ({ from: i + 1, to: i + 1 }));
         const results = await splitPdf(file, allRanges);
         results.forEach((bytes, i) => {
-          const name = (pageNames[i] || `pagina_${i + 1}`).replace(/[^a-zA-Z0-9À-ú\s_-]/g, "").trim() || `pagina_${i + 1}`;
-          zip.file(`${name}.pdf`, bytes);
+          zip.file(`${sanitize(pageNames[i] || "", `pagina_${i + 1}`)}.pdf`, bytes);
         });
         const zipBytes = await zip.generateAsync({ type: "uint8array" });
         const blob = new Blob([zipBytes as unknown as ArrayBuffer], { type: "application/zip" });
@@ -181,12 +190,10 @@ export default function SplitPage() {
         }));
         const results = await splitPdf(file, parsed);
         if (results.length === 1) {
-          const name = ranges[0].name.replace(/[^a-zA-Z0-9À-ú\s_-]/g, "").trim() || "parte_1";
-          downloadFile(results[0], `${name}.pdf`);
+          downloadFile(results[0], `${sanitize(ranges[0].name, "parte_1")}.pdf`);
         } else {
           results.forEach((bytes, i) => {
-            const name = (ranges[i]?.name || `parte_${i + 1}`).replace(/[^a-zA-Z0-9À-ú\s_-]/g, "").trim() || `parte_${i + 1}`;
-            zip.file(`${name}.pdf`, bytes);
+            zip.file(`${sanitize(ranges[i]?.name || "", `parte_${i + 1}`)}.pdf`, bytes);
           });
           const zipBytes = await zip.generateAsync({ type: "uint8array" });
           const blob = new Blob([zipBytes as unknown as ArrayBuffer], { type: "application/zip" });
@@ -269,9 +276,9 @@ export default function SplitPage() {
                 <button onClick={() => setNamingMode("auto")} className={`p-4 rounded-xl border text-left transition-all ${namingMode === "auto" ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}>
                   <div className="flex items-center gap-2 mb-1">
                     <Wand2 size={14} className={namingMode === "auto" ? "text-blue-600" : "text-slate-400"} />
-                    <p className={`text-sm font-medium ${namingMode === "auto" ? "text-blue-700" : "text-slate-700"}`}>Automático com IA</p>
+                    <p className={`text-sm font-medium ${namingMode === "auto" ? "text-blue-700" : "text-slate-700"}`}>Automático</p>
                   </div>
-                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Claude lê e sugere nomes</p>
+                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Lê texto · OCR para escaneados</p>
                 </button>
                 <button onClick={() => setNamingMode("manual")} className={`p-4 rounded-xl border text-left transition-all ${namingMode === "manual" ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}>
                   <div className="flex items-center gap-2 mb-1">
@@ -295,7 +302,7 @@ export default function SplitPage() {
                   ) : (
                     <Wand2 size={15} />
                   )}
-                  {status === "reading" ? readingLabel : "Analisar com IA e sugerir nomes"}
+                  {status === "reading" ? readingLabel : "Ler PDF e sugerir nomes"}
                 </button>
                 {status === "reading" && (
                   <div className="mt-3 h-1.5 bg-slate-100 rounded-full overflow-hidden">
@@ -303,7 +310,7 @@ export default function SplitPage() {
                   </div>
                 )}
                 <p className="text-xs text-slate-400 mt-2">
-                  Funciona com PDFs normais e escaneados. O Claude analisa cada página como imagem.
+                  Gratuito · roda no seu navegador. PDFs escaneados usam OCR e podem demorar um pouco mais.
                 </p>
               </div>
             )}
