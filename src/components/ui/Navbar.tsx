@@ -45,7 +45,6 @@ export default function Navbar() {
         </Link>
 
         <nav className="hidden md:flex items-center gap-1 text-sm text-slate-500">
-          {/* Dropdown ferramentas */}
           <div className="relative">
             <button
               onClick={() => setShowTools(!showTools)}
@@ -71,13 +70,20 @@ export default function Navbar() {
               </div>
             )}
           </div>
+        </nav>
 
-          <a
-            href="https://github.com/telesouttax/outtax-pdfs"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-3 py-2 rounded-lg hover:bg-slate-100 hover:text-slate-900 transition-colors"
-          >
+        <div className="flex items-center gap-3">
+          {email ? (
+            <>
+              <div className="hidden md:flex items-center gap-2 text-sm text-slate-600">
+                <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center">
+                  <User size={14} className="text-blue-600" />
+                </div>
+                <span className="max-w-[180px] truncate">{email}</span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 text-sm px-3 py-2 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors"
               >
                 <LogOut size={14} />
                 Sair
