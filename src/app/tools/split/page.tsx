@@ -56,6 +56,21 @@ async function getPageText(file: File, pageNum: number): Promise<string> {
 
 function suggestNameFromText(text: string, pageNum: number): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
+
+  // Tenta encontrar o recebedor/beneficiário — geralmente após palavras-chave
+  const receiverKeywords = [
+    /(?:benefici[aá]rio|recebedor|credor|favorecido|empresa|raz[aã]o social|nome)[:\s]+([A-ZÀ-Ú][a-zA-ZÀ-ú\s]{3,50})/i,
+    /(?:pagar a|pague a|pay to)[:\s]+([A-ZÀ-Ú][a-zA-ZÀ-ú\s]{3,50})/i,
+  ];
+
+  for (const pattern of receiverKeywords) {
+    const match = cleaned.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim().slice(0, 60);
+    }
+  }
+
+  // Fallback: primeira sequência de palavras em maiúsculas (nome próprio)
   const upperWordsMatch = cleaned.match(/\b([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}){1,5})\b/);
   if (upperWordsMatch) {
     return upperWordsMatch[1]
@@ -63,6 +78,7 @@ function suggestNameFromText(text: string, pageNum: number): string {
       .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
       .join(" ");
   }
+
   const words = cleaned.split(" ").filter((w) => w.length > 3).slice(0, 4);
   if (words.length > 0) return words.join(" ").slice(0, 40);
   return `Pagina_${pageNum}`;
