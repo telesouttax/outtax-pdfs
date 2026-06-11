@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Scissors, Download, X, AlertCircle, CheckCircle2, Plus, Wand2, Pencil } from "lucide-react";
+import { Scissors, Download, X, AlertCircle, CheckCircle2, Plus, Wand2, Pencil, CopyCheck } from "lucide-react";
 import Navbar from "@/components/ui/Navbar";
 import Footer from "@/components/ui/Footer";
 import DropZone from "@/components/ui/DropZone";
@@ -13,7 +13,6 @@ type NamingMode = "auto" | "manual";
 
 async function getPdfJs() {
   const pdfjsLib = await import("pdfjs-dist");
-  // Usa unpkg CDN com a versão exata instalada
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
   return pdfjsLib;
 }
@@ -76,6 +75,7 @@ export default function SplitPage() {
   const [namingMode, setNamingMode] = useState<NamingMode>("auto");
   const [ranges, setRanges] = useState<Range[]>([{ from: "1", to: "1", name: "Parte 1" }]);
   const [pageNames, setPageNames] = useState<string[]>([]);
+  const [bulkName, setBulkName] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [readingProgress, setReadingProgress] = useState(0);
   const [readingLabel, setReadingLabel] = useState("");
@@ -94,6 +94,13 @@ export default function SplitPage() {
       setError("Não foi possível ler o PDF. Verifique se o arquivo não está protegido.");
       setStatus("error");
     }
+  }
+
+  function applyBulkName() {
+    if (!bulkName.trim()) return;
+    setPageNames(Array.from({ length: pageCount }, (_, i) =>
+      pageCount > 1 ? `${bulkName.trim()} ${i + 1}` : bulkName.trim()
+    ));
   }
 
   async function autoName(pages: number[], onName: (i: number, name: string) => void) {
@@ -218,6 +225,7 @@ export default function SplitPage() {
     setPageCount(0);
     setRanges([{ from: "1", to: "1", name: "Parte 1" }]);
     setPageNames([]);
+    setBulkName("");
     setStatus("idle");
     setError("");
     setReadingProgress(0);
@@ -257,6 +265,7 @@ export default function SplitPage() {
               </button>
             </div>
 
+            {/* Mode selector */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como deseja separar?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -271,6 +280,7 @@ export default function SplitPage() {
               </div>
             </div>
 
+            {/* Naming mode */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como nomear os arquivos?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -291,6 +301,7 @@ export default function SplitPage() {
               </div>
             </div>
 
+            {/* Auto naming */}
             {namingMode === "auto" && (
               <div>
                 <button
@@ -316,11 +327,65 @@ export default function SplitPage() {
               </div>
             )}
 
-            {mode === "all" && (namingMode === "manual" || pageNames.some((n) => !n.startsWith("Pagina_"))) && (
+            {/* Manual naming — all pages mode */}
+            {mode === "all" && namingMode === "manual" && (
+              <div className="space-y-4">
+                {/* Bulk name */}
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
+                  <p className="text-sm font-medium text-slate-700 mb-1">Aplicar um nome para todas as páginas</p>
+                  <p className="text-xs text-slate-400 mb-3">
+                    Digite o nome base e clique em aplicar. Os arquivos serão nomeados como "Nome 1", "Nome 2"…
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={bulkName}
+                      onChange={(e) => setBulkName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && applyBulkName()}
+                      placeholder="Ex: Boleto, Recibo, Cliente…"
+                      className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    />
+                    <button
+                      onClick={applyBulkName}
+                      disabled={!bulkName.trim()}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40"
+                    >
+                      <CopyCheck size={15} />
+                      Aplicar a todas
+                    </button>
+                  </div>
+                </div>
+
+                {/* Individual names */}
+                <div>
+                  <p className="text-sm font-medium text-slate-700 mb-3">
+                    Ou edite página por página
+                    <span className="ml-2 text-xs text-slate-400 font-normal">· alterações aqui sobrescrevem o nome em massa</span>
+                  </p>
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {Array.from({ length: pageCount }, (_, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="text-xs text-slate-400 w-16 shrink-0">Pág. {i + 1}</span>
+                        <input
+                          type="text"
+                          value={pageNames[i] || ""}
+                          onChange={(e) => updatePageName(i, e.target.value)}
+                          placeholder={`pagina_${i + 1}`}
+                          className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Auto naming result — editable list */}
+            {mode === "all" && namingMode === "auto" && pageNames.some((n) => !n.startsWith("Pagina_")) && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">
-                  Nomes das páginas
-                  {namingMode === "auto" && <span className="ml-2 text-xs text-slate-400 font-normal">· edite se precisar ajustar</span>}
+                  Nomes sugeridos
+                  <span className="ml-2 text-xs text-slate-400 font-normal">· edite se precisar ajustar</span>
                 </p>
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                   {Array.from({ length: pageCount }, (_, i) => (
@@ -339,6 +404,7 @@ export default function SplitPage() {
               </div>
             )}
 
+            {/* Ranges */}
             {mode === "ranges" && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">Intervalos de páginas</p>
