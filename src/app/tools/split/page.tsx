@@ -54,34 +54,32 @@ async function getPageText(file: File, pageNum: number): Promise<string> {
   return extractTextWithOCR(file, pageNum);
 }
 
-function suggestNameFromText(text: string, pageNum: number): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-
-  // Tenta encontrar o recebedor/beneficiário — geralmente após palavras-chave
-  const receiverKeywords = [
-    /(?:benefici[aá]rio|recebedor|credor|favorecido|empresa|raz[aã]o social|nome)[:\s]+([A-ZÀ-Ú][a-zA-ZÀ-ú\s]{3,50})/i,
-    /(?:pagar a|pague a|pay to)[:\s]+([A-ZÀ-Ú][a-zA-ZÀ-ú\s]{3,50})/i,
+function extractReceiverName(text: string): string {
+  // Padrões em ordem de prioridade para capturar o recebedor
+  const patterns = [
+    /nome do recebedor[:\s]+([^\n\r]+)/i,
+    /recebedor[:\s]+([^\n\r]+)/i,
+    /benefici[aá]rio[:\s]+([^\n\r]+)/i,
+    /benefici[aá]rio final[:\s]+([^\n\r]+)/i,
+    /raz[aã]o social[:\s]+([^\n\r]+)/i,
+    /favorecido[:\s]+([^\n\r]+)/i,
+    /credor[:\s]+([^\n\r]+)/i,
   ];
 
-  for (const pattern of receiverKeywords) {
-    const match = cleaned.match(pattern);
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
     if (match && match[1]) {
-      return match[1].trim().slice(0, 60);
+      const name = match[1]
+        .replace(/cpf.*$/i, "")
+        .replace(/cnpj.*$/i, "")
+        .replace(/chave.*$/i, "")
+        .replace(/institui.*$/i, "")
+        .trim();
+      if (name.length > 1) return name.slice(0, 60);
     }
   }
 
-  // Fallback: primeira sequência de palavras em maiúsculas (nome próprio)
-  const upperWordsMatch = cleaned.match(/\b([A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}(?:\s+[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{2,}){1,5})\b/);
-  if (upperWordsMatch) {
-    return upperWordsMatch[1]
-      .split(" ")
-      .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
-      .join(" ");
-  }
-
-  const words = cleaned.split(" ").filter((w) => w.length > 3).slice(0, 4);
-  if (words.length > 0) return words.join(" ").slice(0, 40);
-  return `Pagina_${pageNum}`;
+  return "sem nome de pagador";
 }
 
 export default function SplitPage() {
@@ -122,9 +120,9 @@ export default function SplitPage() {
   async function autoName(pages: number[], onName: (i: number, name: string) => void) {
     for (let idx = 0; idx < pages.length; idx++) {
       const pageNum = pages[idx];
-      setReadingLabel(`Analisando página ${pageNum}${pages.length > 1 ? ` de ${pages.length}` : ""}…`);
+      setReadingLabel(`Analisando página ${pageNum} de ${pageCount}…`);
       const text = await getPageText(file!, pageNum);
-      onName(idx, suggestNameFromText(text, pageNum));
+      onName(idx, extractReceiverName(text));
       setReadingProgress(Math.round(((idx + 1) / pages.length) * 100));
     }
   }
@@ -281,7 +279,6 @@ export default function SplitPage() {
               </button>
             </div>
 
-            {/* Mode selector */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como deseja separar?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -296,7 +293,6 @@ export default function SplitPage() {
               </div>
             </div>
 
-            {/* Naming mode */}
             <div>
               <p className="text-sm font-medium text-slate-700 mb-3">Como nomear os arquivos?</p>
               <div className="grid grid-cols-2 gap-3">
@@ -305,7 +301,7 @@ export default function SplitPage() {
                     <Wand2 size={14} className={namingMode === "auto" ? "text-blue-600" : "text-slate-400"} />
                     <p className={`text-sm font-medium ${namingMode === "auto" ? "text-blue-700" : "text-slate-700"}`}>Automático</p>
                   </div>
-                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Lê texto · OCR para escaneados</p>
+                  <p className={`text-xs ${namingMode === "auto" ? "text-blue-500" : "text-slate-400"}`}>Lê o nome do recebedor</p>
                 </button>
                 <button onClick={() => setNamingMode("manual")} className={`p-4 rounded-xl border text-left transition-all ${namingMode === "manual" ? "border-blue-400 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}>
                   <div className="flex items-center gap-2 mb-1">
@@ -317,7 +313,6 @@ export default function SplitPage() {
               </div>
             </div>
 
-            {/* Auto naming */}
             {namingMode === "auto" && (
               <div>
                 <button
@@ -338,15 +333,13 @@ export default function SplitPage() {
                   </div>
                 )}
                 <p className="text-xs text-slate-400 mt-2">
-                  Gratuito · roda no seu navegador. PDFs escaneados usam OCR e podem demorar um pouco mais.
+                  Captura o "nome do recebedor" de cada página. Páginas sem esse campo ficam como "sem nome de pagador".
                 </p>
               </div>
             )}
 
-            {/* Manual naming — all pages mode */}
             {mode === "all" && namingMode === "manual" && (
               <div className="space-y-4">
-                {/* Bulk name */}
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl">
                   <p className="text-sm font-medium text-slate-700 mb-1">Aplicar um nome para todas as páginas</p>
                   <p className="text-xs text-slate-400 mb-3">
@@ -372,7 +365,6 @@ export default function SplitPage() {
                   </div>
                 </div>
 
-                {/* Individual names */}
                 <div>
                   <p className="text-sm font-medium text-slate-700 mb-3">
                     Ou edite página por página
@@ -396,11 +388,10 @@ export default function SplitPage() {
               </div>
             )}
 
-            {/* Auto naming result — editable list */}
             {mode === "all" && namingMode === "auto" && pageNames.some((n) => !n.startsWith("Pagina_")) && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">
-                  Nomes sugeridos
+                  Nomes encontrados
                   <span className="ml-2 text-xs text-slate-400 font-normal">· edite se precisar ajustar</span>
                 </p>
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -411,8 +402,11 @@ export default function SplitPage() {
                         type="text"
                         value={pageNames[i] || ""}
                         onChange={(e) => updatePageName(i, e.target.value)}
-                        placeholder={`pagina_${i + 1}`}
-                        className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className={`flex-1 border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                          pageNames[i] === "sem nome de pagador"
+                            ? "border-amber-200 bg-amber-50 text-amber-700"
+                            : "border-slate-200"
+                        }`}
                       />
                     </div>
                   ))}
@@ -420,7 +414,6 @@ export default function SplitPage() {
               </div>
             )}
 
-            {/* Ranges */}
             {mode === "ranges" && (
               <div>
                 <p className="text-sm font-medium text-slate-700 mb-3">Intervalos de páginas</p>
