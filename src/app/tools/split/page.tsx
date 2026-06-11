@@ -13,7 +13,8 @@ type NamingMode = "auto" | "manual";
 
 async function getPdfJs() {
   const pdfjsLib = await import("pdfjs-dist");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+  // Usa unpkg CDN com a versão exata instalada
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
   return pdfjsLib;
 }
 
