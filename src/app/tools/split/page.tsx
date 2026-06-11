@@ -55,12 +55,32 @@ async function getPageText(file: File, pageNum: number): Promise<string> {
 }
 
 function extractReceiverName(text: string): string {
-  // Padrões em ordem de prioridade para capturar o recebedor
+  // Palavras que indicam que capturamos lixo de célula adjacente
+  const garbage = [
+    /^data/i, /^cpf/i, /^cnpj/i, /^vencimento/i, /^valor/i,
+    /^desconto/i, /^mora/i, /^pagamento/i, /^institui/i,
+    /^ag[eê]ncia/i, /^tipo/i, /^chave/i, /^\d/, /^R\$/i,
+  ];
+
+  function clean(raw: string): string {
+    return raw
+      .replace(/cpf[/\s]cnpj.*$/i, "")
+      .replace(/cnpj.*$/i, "")
+      .replace(/cpf.*$/i, "")
+      .replace(/chave.*$/i, "")
+      .replace(/institui.*$/i, "")
+      .replace(/data.*$/i, "")
+      .replace(/vencimento.*$/i, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  }
+
+  // Padrões em ordem de prioridade
   const patterns = [
     /nome do recebedor[:\s]+([^\n\r]+)/i,
     /recebedor[:\s]+([^\n\r]+)/i,
-    /benefici[aá]rio[:\s]+([^\n\r]+)/i,
     /benefici[aá]rio final[:\s]+([^\n\r]+)/i,
+    /benefici[aá]rio[:\s]+([^\n\r]+)/i,
     /raz[aã]o social[:\s]+([^\n\r]+)/i,
     /favorecido[:\s]+([^\n\r]+)/i,
     /credor[:\s]+([^\n\r]+)/i,
@@ -69,13 +89,10 @@ function extractReceiverName(text: string): string {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match && match[1]) {
-      const name = match[1]
-        .replace(/cpf.*$/i, "")
-        .replace(/cnpj.*$/i, "")
-        .replace(/chave.*$/i, "")
-        .replace(/institui.*$/i, "")
-        .trim();
-      if (name.length > 1) return name.slice(0, 60);
+      const name = clean(match[1]);
+      // Ignora se o resultado começa com palavra de lixo
+      const isGarbage = garbage.some((g) => g.test(name));
+      if (!isGarbage && name.length > 1) return name.slice(0, 60);
     }
   }
 
