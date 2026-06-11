@@ -28,15 +28,15 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   const pathname = request.nextUrl.pathname;
 
-  const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/cadastro");
-  const isProtectedPage = pathname.startsWith("/tools");
+  const isAuthPage = pathname === "/login" || pathname === "/cadastro";
 
-  if (!user && isProtectedPage) {
+  // Sem login → vai para /login
+  if (!user && !isAuthPage) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("redirect", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
+  // Com login → não deixa voltar para login/cadastro
   if (user && isAuthPage) {
     return NextResponse.redirect(new URL("/tools/split", request.url));
   }
@@ -45,5 +45,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/tools/:path*", "/login", "/cadastro"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js)$).*)",
+  ],
 };
