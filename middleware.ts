@@ -12,13 +12,13 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, options as any)
           );
         },
       },
@@ -27,15 +27,14 @@ export async function middleware(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser();
 
-  const isAuthPage = request.nextUrl.pathname.startsWith("/login") ||
+  const isAuthPage =
+    request.nextUrl.pathname.startsWith("/login") ||
     request.nextUrl.pathname.startsWith("/cadastro");
 
-  // Redireciona para login se não autenticado e tenta acessar área protegida
   if (!user && !isAuthPage && request.nextUrl.pathname !== "/") {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Redireciona para tools se já autenticado e tenta acessar login/cadastro
   if (user && isAuthPage) {
     return NextResponse.redirect(new URL("/tools/split", request.url));
   }
